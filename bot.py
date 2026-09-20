@@ -2,10 +2,12 @@ import os
 import logging
 import threading
 import requests
+from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
+# Thiết lập ghi log hệ thống
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -13,6 +15,7 @@ logging.basicConfig(
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+# Web server giả lập để duy trì cổng HTTP cho Render Web Service không bị tắt
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -25,26 +28,40 @@ def run_web_server():
     server.serve_forever()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lệnh /start hướng dẫn sử dụng"""
     await update.message.reply_text(
         "🤖 Chào ông! Bot Lọ Mod Liên Quân đã sẵn sàng.\n"
-        "👉 Sử dụng lệnh theo cú pháp:\n"
-        "`/mod [Đường dẫn trực tiếp file zip 109.5MB]`"
+        "👉 Sử dụng cú pháp lệnh:\n"
+        "`/mod <link_mediafire_file_zip>`"
     )
 
 async def mod_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Tải file dung lượng lớn thông qua direct link"""
+    """Xử lý tải file dung lượng lớn qua link MediaFire"""
     if not context.args:
-        await update.message.reply_text("⚠️ Thiếu link rồi ông ơi! Gõ theo mẫu: `/mod <đường_dẫn_file_zip>`")
+        await update.message.reply_text("⚠️ Thiếu link rồi ông ơi! Gõ theo mẫu: `/mod <link_mediafire>`")
         return
         
     url = context.args[0]
-    status_message = await update.message.reply_text("📥 Đang kết nối tải gói asset 109.5MB qua đường dẫn trực tiếp...")
+    status_message = await update.message.reply_text("📥 Đang kết nối và phân tích đường dẫn MediaFire...")
     
     try:
+        target_url = url
+        
+        # Tự động trích xuất lấy link tải trực tiếp (Direct Download Link) từ MediaFire
+        if "mediafire.com" in url:
+            resp = requests.get(url)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            download_btn = soup.find('a', id='downloadButton')
+            if download_btn and 'href' in download_btn.attrs:
+                target_url = download_btn['href']
+            else:
+                raise Exception("Không tìm thấy nút tải trực tiếp từ trang MediaFire này!")
+
+        await status_message.edit_text("📥 Đang tiến hành tải gói asset 109.5MB về server Render...")
         local_path = os.path.join("/tmp", "Florentino_Mod.zip")
         
-        # Tải file lớn bằng thư viện requests (bỏ qua giới hạn 20MB của Telegram)
-        response = requests.get(url, stream=True)
+        # Tải file trực tiếp dạng stream để tiết kiệm RAM
+        response = requests.get(target_url, stream=True)
         response.raise_for_status()
         
         with open(local_path, "wb") as f:
@@ -56,19 +73,19 @@ async def mod_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         output_path = local_path
         
-        # Gửi file kết quả qua Telegram (Telegram cho phép upload file dưới 50MB, nếu file kết quả lớn hơn 50MB ta sẽ lưu vào server hoặc chia nhỏ)
-        await status_message.edit_text("📤 Đang gửi file mod hoàn chỉnh...")
+        # Gửi file kết quả trả lại cho người dùng trên Telegram
+        await status_message.edit_text("📤 Đang đóng gói và gửi file hoàn chỉnh cho ông...")
         with open(output_path, "rb") as f:
             await update.message.reply_document(
                 document=f,
                 filename="Florentino_Mod_Da_Xu_Ly.zip",
-                caption="✅ Đã xử lý gói mod Liên Quân thành công!"
+                caption="✅ Đã xử lý gói mod Liên Quân qua link MediaFire thành công!"
             )
             
         await status_message.delete()
         
     except Exception as e:
-        logging.error(f"Lỗi tải file: {e}")
+        logging.error(f"Lỗi xử lý file MediaFire: {e}")
         await status_message.edit_text(f"❌ Có lỗi xảy ra: {str(e)}")
 
 def main():
@@ -76,9 +93,11 @@ def main():
         print("Lỗi: Chưa cấu hình BOT_TOKEN!")
         return
 
+    # Chạy Web Server ngầm phục vụ Render
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
 
+    # Khởi động Telegram Bot
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("mod", mod_download))
