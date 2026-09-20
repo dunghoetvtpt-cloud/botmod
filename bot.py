@@ -76,7 +76,7 @@ async def tao_khung(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     # Thay 'YOUR_BOT_TOKEN' bằng Token thực tế của bạn
-    TOKEN = "YOUR_BOT_TOKEN"
+    TOKEN = "8757645824:AAEy_4hGt3aE5fkd7nbg1pACF0iMvWEQzxA"
     
     app = ApplicationBuilder().token(TOKEN).build()
     
