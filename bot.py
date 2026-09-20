@@ -1,7 +1,9 @@
 import os
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -10,34 +12,36 @@ logging.basicConfig(
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Chào ông! Bot Lọ Mod Liên Quân đã sẵn sàng.\n"
-        "👉 Ông chỉ cần **gửi trực tiếp file zip asset (ví dụ file 109.5MB)** vào đây, bot sẽ tự động nhận diện và xử lý cho ông nhé!"
-    )
+# Web server giả lập để Render Web Service không bị lỗi cổng HTTP
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    server.serve_forever()
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Nhận file do người dùng gửi trực tiếp vào chat để xử lý"""
+    """Nhận file zip do người dùng gửi trực tiếp để xử lý"""
     document = update.message.document
     if not document:
         return
         
-    status_message = await update.message.reply_text(f"📥 Đang nhận file `{document.file_name}` từ ông...")
+    status_message = await update.message.reply_text(f"📥 Đang nhận file `{document.file_name}`...")
     
     try:
-        # Tải file trực tiếp từ chat của người dùng về server
         file = await context.bot.get_file(document.file_id)
         local_path = os.path.join("/tmp", document.file_name)
         
-        await status_message.edit_text("📥 Đang tải file asset về server (dung lượng lớn có thể mất vài giây)...")
+        await status_message.edit_text("📥 Đang tải file asset 109.5MB về server...")
         await file.download_to_drive(local_path)
         
-        # Xử lý UnityPy hoặc thao tác file ở đây
         await status_message.edit_text("⚙️ Đang bóc tách và xử lý tài nguyên game...")
+        output_path = local_path
         
-        output_path = local_path # Giữ nguyên hoặc đóng gói lại
-        
-        # Gửi trả file kết quả
         await status_message.edit_text("📤 Đang gửi file mod hoàn chỉnh về cho ông...")
         with open(output_path, "rb") as f:
             await update.message.reply_document(
@@ -50,20 +54,22 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logging.error(f"Lỗi xử lý file: {e}")
-        await status_message.edit_text(f"❌ Có lỗi xảy ra khi xử lý: {str(e)}")
+        await status_message.edit_text(f"❌ Có lỗi xảy ra: {str(e)}")
 
 def main():
     if not BOT_TOKEN:
         print("Lỗi: Chưa cấu hình BOT_TOKEN!")
         return
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # Chạy Web Server ngầm ở một luồng riêng để đáp ứng yêu cầu của Render Web Service
+    server_thread = threading.Thread(target=run_web_server, daemon=True)
+    server_thread.start()
 
-    app.add_handler(CommandHandler("start", start))
-    # Lắng nghe mọi file tài liệu (zip) người dùng gửi vào
+    # Khởi động Telegram Bot
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
-    print("Bot đang chạy...")
+    print("Bot đang chạy polling...")
     app.run_polling()
 
 if __name__ == '__main__':
