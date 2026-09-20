@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import asyncio
 import requests
 from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -15,7 +16,7 @@ logging.basicConfig(
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Web server giả lập để duy trì cổng HTTP cho Render Web Service không bị tắt
+# Web server giả lập duy trì cổng 10000 cho Render
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -28,26 +29,22 @@ def run_web_server():
     server.serve_forever()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh /start hướng dẫn sử dụng"""
     await update.message.reply_text(
         "🤖 Chào ông! Bot Lọ Mod Liên Quân đã sẵn sàng.\n"
         "👉 Sử dụng cú pháp lệnh:\n"
-        "`/mod <link_mediafire_file_zip>`"
+        "`/mod <link_mediafire>`"
     )
 
 async def mod_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Xử lý tải file dung lượng lớn qua link MediaFire"""
     if not context.args:
         await update.message.reply_text("⚠️ Thiếu link rồi ông ơi! Gõ theo mẫu: `/mod <link_mediafire>`")
         return
         
     url = context.args[0]
-    status_message = await update.message.reply_text("📥 Đang kết nối và phân tích đường dẫn MediaFire...")
+    status_message = await update.message.reply_text("📥 Đang phân tích đường dẫn MediaFire...")
     
     try:
         target_url = url
-        
-        # Tự động trích xuất lấy link tải trực tiếp (Direct Download Link) từ MediaFire
         if "mediafire.com" in url:
             resp = requests.get(url)
             soup = BeautifulSoup(resp.text, 'html.parser')
@@ -60,7 +57,6 @@ async def mod_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_message.edit_text("📥 Đang tiến hành tải gói asset 109.5MB về server Render...")
         local_path = os.path.join("/tmp", "Florentino_Mod.zip")
         
-        # Tải file trực tiếp dạng stream để tiết kiệm RAM
         response = requests.get(target_url, stream=True)
         response.raise_for_status()
         
@@ -69,17 +65,12 @@ async def mod_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if chunk:
                     f.write(chunk)
                     
-        await status_message.edit_text("⚙️ Đã tải xong! Đang bóc tách và xử lý tài nguyên game...")
-        
-        output_path = local_path
-        
-        # Gửi file kết quả trả lại cho người dùng trên Telegram
-        await status_message.edit_text("📤 Đang đóng gói và gửi file hoàn chỉnh cho ông...")
-        with open(output_path, "rb") as f:
+        await status_message.edit_text("📤 Đang gửi file hoàn chỉnh cho ông...")
+        with open(local_path, "rb") as f:
             await update.message.reply_document(
                 document=f,
                 filename="Florentino_Mod_Da_Xu_Ly.zip",
-                caption="✅ Đã xử lý gói mod Liên Quân qua link MediaFire thành công!"
+                caption="✅ Đã xử lý gói mod Liên Quân thành công!"
             )
             
         await status_message.delete()
@@ -93,11 +84,14 @@ def main():
         print("Lỗi: Chưa cấu hình BOT_TOKEN!")
         return
 
-    # Chạy Web Server ngầm phục vụ Render
+    # Chạy Web Server ngầm cho Render
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
 
-    # Khởi động Telegram Bot
+    # Khởi tạo và chạy bot an toàn với event loop riêng
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("mod", mod_download))
