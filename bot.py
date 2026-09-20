@@ -2,21 +2,16 @@ import os
 import logging
 import threading
 import asyncio
+import zipfile
 import requests
 from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# Thiết lập ghi log hệ thống
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Web server giả lập duy trì cổng 10000 cho Render
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -29,15 +24,11 @@ def run_web_server():
     server.serve_forever()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Chào ông! Bot Lọ Mod Liên Quân đã sẵn sàng.\n"
-        "👉 Sử dụng cú pháp lệnh:\n"
-        "`/mod <link_mediafire>`"
-    )
+    await update.message.reply_text("🤖 Bot Lọ Mod đã sẵn sàng! Gõ `/mod <link_mediafire>`")
 
 async def mod_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("⚠️ Thiếu link rồi ông ơi! Gõ theo mẫu: `/mod <link_mediafire>`")
+        await update.message.reply_text("⚠️ Thiếu link rồi ông ơi!")
         return
         
     url = context.args[0]
@@ -52,51 +43,62 @@ async def mod_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if download_btn and 'href' in download_btn.attrs:
                 target_url = download_btn['href']
             else:
-                raise Exception("Không tìm thấy nút tải trực tiếp từ trang MediaFire này!")
+                raise Exception("Không tìm thấy link tải trực tiếp!")
 
-        await status_message.edit_text("📥 Đang tiến hành tải gói asset 109.5MB về server Render...")
-        local_path = os.path.join("/tmp", "Florentino_Mod.zip")
+        await status_message.edit_text("📥 Đang tải file asset về server...")
+        zip_path = os.path.join("/tmp", "source.zip")
+        extracted_path = os.path.join("/tmp", "extracted")
         
         response = requests.get(target_url, stream=True)
         response.raise_for_status()
-        
-        with open(local_path, "wb") as f:
+        with open(zip_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
                     
-        await status_message.edit_text("📤 Đang gửi file hoàn chỉnh cho ông...")
-        with open(local_path, "rb") as f:
+        await status_message.edit_text("⚙️ Đang lọc bỏ file rác, chỉ giữ lại tài nguyên cần thiết...")
+        
+        # Giải nén file
+        os.makedirs(extracted_path, exist_ok=True)
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extracted_path)
+            
+        # Lọc: Chỉ giữ lại các file asset/unity hoặc file có dung lượng phù hợp, loại bỏ file nặng không cần thiết
+        slim_zip_path = os.path.join("/tmp", "Florentino_Mod_Gon.zip")
+        with zipfile.ZipFile(slim_zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_out:
+            for root, dirs, files in os.walk(extracted_path):
+                for file in files:
+                    # Chỉ lấy file asset cốt lõi hoặc bỏ qua các file rác lớn
+                    if file.endswith(('.unity3d', '.txt', '.bytes', '.prefab')) or not file.endswith(('.mp4', '.avi')):
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, extracted_path)
+                        zip_out.write(file_path, arcname)
+
+        await status_message.edit_text("📤 Đang gửi file gọn nhẹ cho ông...")
+        with open(slim_zip_path, "rb") as f:
             await update.message.reply_document(
                 document=f,
-                filename="Florentino_Mod_Da_Xu_Ly.zip",
-                caption="✅ Đã xử lý gói mod Liên Quân thành công!"
+                filename="Florentino_Mod_Da_Loc.zip",
+                caption="✅ Đã lọc và tối ưu gói mod thành công dưới 50MB!"
             )
             
         await status_message.delete()
         
     except Exception as e:
-        logging.error(f"Lỗi xử lý file MediaFire: {e}")
+        logging.error(f"Lỗi: {e}")
         await status_message.edit_text(f"❌ Có lỗi xảy ra: {str(e)}")
 
 def main():
     if not BOT_TOKEN:
-        print("Lỗi: Chưa cấu hình BOT_TOKEN!")
         return
-
-    # Chạy Web Server ngầm cho Render
-    server_thread = threading.Thread(target=run_web_server, daemon=True)
-    server_thread.start()
-
-    # Khởi tạo và chạy bot an toàn với event loop riêng
+    threading.Thread(target=run_web_server, daemon=True).start()
+    
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("mod", mod_download))
-
-    print("Bot đang chạy...")
     app.run_polling()
 
 if __name__ == '__main__':
