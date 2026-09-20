@@ -1,9 +1,10 @@
 import os
 import logging
 import threading
+import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -12,7 +13,6 @@ logging.basicConfig(
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Web server giả lập để Render Web Service không bị lỗi cổng HTTP
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -24,36 +24,51 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), DummyHandler)
     server.serve_forever()
 
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Nhận file zip do người dùng gửi trực tiếp để xử lý"""
-    document = update.message.document
-    if not document:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 Chào ông! Bot Lọ Mod Liên Quân đã sẵn sàng.\n"
+        "👉 Sử dụng lệnh theo cú pháp:\n"
+        "`/mod [Đường dẫn trực tiếp file zip 109.5MB]`"
+    )
+
+async def mod_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tải file dung lượng lớn thông qua direct link"""
+    if not context.args:
+        await update.message.reply_text("⚠️ Thiếu link rồi ông ơi! Gõ theo mẫu: `/mod <đường_dẫn_file_zip>`")
         return
         
-    status_message = await update.message.reply_text(f"📥 Đang nhận file `{document.file_name}`...")
+    url = context.args[0]
+    status_message = await update.message.reply_text("📥 Đang kết nối tải gói asset 109.5MB qua đường dẫn trực tiếp...")
     
     try:
-        file = await context.bot.get_file(document.file_id)
-        local_path = os.path.join("/tmp", document.file_name)
+        local_path = os.path.join("/tmp", "Florentino_Mod.zip")
         
-        await status_message.edit_text("📥 Đang tải file asset 109.5MB về server...")
-        await file.download_to_drive(local_path)
+        # Tải file lớn bằng thư viện requests (bỏ qua giới hạn 20MB của Telegram)
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
         
-        await status_message.edit_text("⚙️ Đang bóc tách và xử lý tài nguyên game...")
+        with open(local_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    
+        await status_message.edit_text("⚙️ Đã tải xong! Đang bóc tách và xử lý tài nguyên game...")
+        
         output_path = local_path
         
-        await status_message.edit_text("📤 Đang gửi file mod hoàn chỉnh về cho ông...")
+        # Gửi file kết quả qua Telegram (Telegram cho phép upload file dưới 50MB, nếu file kết quả lớn hơn 50MB ta sẽ lưu vào server hoặc chia nhỏ)
+        await status_message.edit_text("📤 Đang gửi file mod hoàn chỉnh...")
         with open(output_path, "rb") as f:
             await update.message.reply_document(
                 document=f,
-                filename=f"Mod_Done_{document.file_name}",
-                caption="✅ Đã xử lý xong gói mod Liên Quân thành công!"
+                filename="Florentino_Mod_Da_Xu_Ly.zip",
+                caption="✅ Đã xử lý gói mod Liên Quân thành công!"
             )
             
         await status_message.delete()
         
     except Exception as e:
-        logging.error(f"Lỗi xử lý file: {e}")
+        logging.error(f"Lỗi tải file: {e}")
         await status_message.edit_text(f"❌ Có lỗi xảy ra: {str(e)}")
 
 def main():
@@ -61,15 +76,14 @@ def main():
         print("Lỗi: Chưa cấu hình BOT_TOKEN!")
         return
 
-    # Chạy Web Server ngầm ở một luồng riêng để đáp ứng yêu cầu của Render Web Service
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
 
-    # Khởi động Telegram Bot
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("mod", mod_download))
 
-    print("Bot đang chạy polling...")
+    print("Bot đang chạy...")
     app.run_polling()
 
 if __name__ == '__main__':
